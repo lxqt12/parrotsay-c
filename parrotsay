@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""parrotsay - a cowsay clone, but with a parrot. Colors persist across runs."""
+
+import sys
+import os
+import json
+import textwrap
+import colorsys
+
+CONFIG_DIR = os.path.expanduser("~/.config/parrotsay")
+CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+
+# Basic colors -> hue in degrees. White/black/grey are handled separately
+# since they don't have a hue.
+BASE_HUES = {
+    "red": 0, "orange": 30, "yellow": 55, "green": 120,
+    "cyan": 180, "blue": 220, "purple": 270, "pink": 320,
+}
+NEUTRALS = ("white", "black", "grey", "gray")
+VALID_COLORS = list(BASE_HUES) + list(NEUTRALS)
+
+PARTS = ["beak", "head", "wings", "eyes"]
+LABELS = {"beak": "Beak", "head": "Head", "wings": "Wings", "eyes": "Eyes"}
+
+RESET = "\033[0m"
+
+
+def resolve_rgb(name, brightness):
+    """brightness 0-100, higher = lighter/more pastel (closer to white)."""
+    name = name.lower()
+    brightness = max(0, min(100, brightness))
+
+    if name == "white":
+        level = int(180 + brightness * 0.75)
+    elif name == "black":
+        level = int(brightness * 0.6)
+    elif name in ("grey", "gray"):
+        level = int(60 + brightness * 1.6)
+    else:
+        hue = BASE_HUES[name]
+        saturation = 1.0 - (brightness / 100.0)
+        r, g, b = colorsys.hsv_to_rgb(hue / 360.0, saturation, 1.0)
+        return int(r * 255), int(g * 255), int(b * 255)
+
+    level = max(0, min(255, level))
+    return level, level, level
+
+
+def ansi(name, brightness):
+    r, g, b = resolve_rgb(name, brightness)
+    return f"\033[38;2;{r};{g};{b}m"
+
+
+def prompt_color(label):
+    print(f"\n{label} color?")
+    print("  " + ", ".join(BASE_HUES) + ", white, black, grey")
+    print("  (add a brightness 0-100, e.g. 'Blue 78' for a light blue)")
+    while True:
+        raw = input("> ").strip()
+        if not raw:
+            continue
+        pieces = raw.rsplit(" ", 1)
+        name = pieces[0].strip().lower()
+        brightness = 50
+        if len(pieces) == 2 and pieces[1].isdigit():
+            name = pieces[0].strip().lower()
+            brightness = int(pieces[1])
+        elif raw.strip().isdigit():
+            print("Give a color name, optionally followed by a brightness number.")
+            continue
+        if name in VALID_COLORS:
+            return {"name": name, "brightness": brightness}
+        print("Didn't recognize that color, try again.")
+
+
+def run_setup():
+    print("Setting up parrotsay! Pick a color for each part.")
+    config = {part: prompt_color(LABELS[part]) for part in PARTS}
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(config, f, indent=2)
+    print("\nSaved. Run parrotsay any time to see your parrot.")
+    print("Run parrotsay-c whenever you want to redo these colors.\n")
+    return config
+
+
+def load_config():
+    if not os.path.exists(CONFIG_PATH):
+        return run_setup()
+    try:
+        with open(CONFIG_PATH) as f:
+            config = json.load(f)
+        if not all(part in config for part in PARTS):
+            return run_setup()
+        return config
+    except (json.JSONDecodeError, OSError):
+        return run_setup()
+
+
+def c(text, config, part):
+    return f"{ansi(config[part]['name'], config[part]['brightness'])}{text}{RESET}"
+
+
+def build_parrot(config):
+    lines = [
+        f"         {c('.--.', config, 'head')}",
+        f"          {c('/', config, 'head')}  {c('6_6', config, 'eyes')}",
+        f"          {c(chr(92), config, 'head')}  {c('(__' + chr(92), config, 'beak')}",
+        f"         {c('//   ' + chr(92) + chr(92), config, 'wings')}",
+        f"        {c('((     ))', config, 'wings')}",
+        '  ======="===""===============',
+        "           |||",
+        "           |||",
+        "           '|'",
+        "            '",
+    ]
+    return "\n".join(lines)
+
+
+def build_bubble(message):
+    lines = []
+    for part in message.splitlines():
+        lines.extend(textwrap.wrap(part, width=60) or [""])
+    if not lines:
+        lines = [""]
+    width = max(len(line) for line in lines)
+
+    out = [" " + "_" * (width + 2)]
+    if len(lines) == 1:
+        out.append(f"< {lines[0].ljust(width)} >")
+    else:
+        for i, line in enumerate(lines):
+            if i == 0:
+                l, r = "/", "\\"
+            elif i == len(lines) - 1:
+                l, r = "\\", "/"
+            else:
+                l, r = "|", "|"
+            out.append(f"{l} {line.ljust(width)} {r}")
+    out.append(" " + "-" * (width + 2))
+    return "\n".join(out)
+
+
+def main():
+    invoked_as = os.path.basename(sys.argv[0])
+
+    if invoked_as == "parrotsay-c":
+        run_setup()
+        return
+
+    config = load_config()
+
+    if len(sys.argv) > 1:
+        message = " ".join(sys.argv[1:])
+    elif not sys.stdin.isatty():
+        message = sys.stdin.read().rstrip("\n") or "Squawk!"
+    else:
+        message = "Squawk!"
+
+    print(build_bubble(message))
+    print("        \\")
+    print("         \\")
+    print(build_parrot(config))
+
+
+if __name__ == "__main__":
+    main()
